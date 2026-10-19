@@ -27,8 +27,6 @@
     <section class="pane">
       <h3>Extracted Data (editable)</h3>
       <div id="grid"></div>
-      <button id="showJson" class="e-btn" style="margin-top:8px">Show JSON</button>
-      <pre id="json"></pre>
     </section>
   </main>
 
@@ -65,22 +63,24 @@
       setStatus('Extracting...');
       const body = new FormData();
       body.append('file', file);
+      // PDFs open directly in the viewer; images are shown from the PDF the server returns.
+      if (file.type === 'application/pdf') {
+        const reader = new FileReader();
+        reader.onload = () => viewer.load(reader.result, null);
+        reader.readAsDataURL(file);
+      }
       try {
         const res = await fetch('/api/extract', { method: 'POST', body });
         if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
-        viewer.load(data.pdf, null);
-        grid.dataSource = data.fields.map(f => ({ Field: f.field, Value: f.value }));
+        const { fields, pdf } = await res.json();
+        if (pdf) viewer.load(pdf, null);
+        grid.dataSource = fields.map(f => ({ Field: f.field, Value: f.value }));
         setStatus('Done. Double-click a value to edit.');
       } catch (err) {
         setStatus(err.message.replace(/^"|"$/g, ''), true);
       }
     });
 
-    document.getElementById('showJson').addEventListener('click', () => {
-      grid.editModule.batchSave();
-      document.getElementById('json').textContent = JSON.stringify(grid.dataSource, null, 2);
-    });
   </script>
 </body>
 </html>

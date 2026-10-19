@@ -42,12 +42,13 @@ app.MapPost("/api/extract", async (IFormFile file) =>
         return Results.BadRequest("Could not read the document: " + ex.Message);
     }
 
+    var root = JsonDocument.Parse(json).RootElement;
     var lines = new List<string>();
-    CollectText(JsonDocument.Parse(json).RootElement, lines);
+    CollectText(root, lines);
 
     return Results.Json(new
     {
-        fields = FieldParser.Parse(lines),
+        fields = FieldParser.Parse(lines, root),
         pdf = ext == ".pdf" ? null : "data:application/pdf;base64," + Convert.ToBase64String(pdfBytes)
     });
 }).DisableAntiforgery();
@@ -94,19 +95,79 @@ record FieldRow(string Field, string Value);
 
 static class FieldParser
 {
-    // Labels are matched loosely; the value is whatever text follows, with no type/format validation
-    // (dates may be in any format or handwritten, so the raw OCR text is returned for the user to correct).
-    const string NameLabel = @"(?:full\s+)?name";
-    const string EmailLabel = @"e-?mail(?:\s+address)?";
-    const string DateLabel = @"date\s+of\s+(?:the\s+)?(?:incident|accident|loss)|incident\s+date|date(?=\s*:)";
-    static readonly string[] AllLabels = { NameLabel, EmailLabel, DateLabel };
+    const string SupplierLabel = @"supplier(?:\s+name)?|vendor(?:\s+name)?|sold\s+by|bill(?:ed)?\s+from|from";
+    const string InvoiceNoLabel = @"invoice\s*(?:no\.?|number|#|num)|inv\s*(?:no\.?|#)|bill\s+(?:no\.?|number)";
+    const string InvoiceDateLabel = @"invoice\s+date|date\s+of\s+invoice|bill\s+date|date";
 
-    public static List<FieldRow> Parse(List<string> lines) => new()
+    const string DescHeader = @"description|item|particulars|details|product|service";
+    const string QtyHeader = @"qty|quantity|units|nos";
+    const string AmountHeader = @"amount|total|price|cost|rate|value";
+    const string SummaryRow = @"^(?:sub\s*-?\s*total|total|grand\s+total|tax|vat|gst|discount|balance|amount\s+due|shipping)\b";
+    static readonly Regex Money = new(@"(?:[$€£¥₹]|USD|EUR|GBP|INR|Rs\.?)\s*\d[\d,]*(?:\.\d+)?|\d[\d,]*\.\d{2}\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Labelled values are returned as raw text with no type/format validation; multi-value fields are joined with "; ".
+    public static List<FieldRow> Parse(List<string> lines, JsonElement root)
     {
-        new("Name", Labeled(lines, NameLabel)),
-        new("Email Address", Labeled(lines, EmailLabel)),
-        new("Date of Incident", Labeled(lines, DateLabel))
-    };
+        var items = LineItems(root);
+        var amounts = items.Amounts.Count > 0 ? items.Amounts : Money.Matches(string.Join("\n", lines)).Select(m => m.Value.Trim()).ToList();
+        return new()
+        {
+            new("Supplier Name", Labeled(lines, SupplierLabel) is { Length: > 0 } s ? s : lines.FirstOrDefault() ?? ""),
+            new("Invoice Number", Labeled(lines, InvoiceNoLabel)),
+            new("Invoice Date", Labeled(lines, InvoiceDateLabel)),
+            new("Description", string.Join("; ", items.Descriptions)),
+            new("Quantities", string.Join("; ", items.Quantities)),
+            new("Monetary Amounts", string.Join("; ", amounts))
+        };
+    }
+
+    record Items(List<string> Descriptions, List<string> Quantities, List<string> Amounts);
+
+    // Finds tables whose header row has description / quantity / amount columns and reads the rows beneath it.
+    static Items LineItems(JsonElement root)
+    {
+        var result = new Items(new(), new(), new());
+        foreach (var table in Tables(root))
+        {
+            var rows = table.GetProperty("Rows").EnumerateArray()
+                .Select(r => r.GetProperty("Cells").EnumerateArray().Select(CellText).ToList()).ToList();
+            int h = rows.FindIndex(r => r.Any(c => Is(c, DescHeader)) && r.Any(c => Is(c, QtyHeader) || Is(c, AmountHeader)));
+            if (h < 0) continue;
+            var header = rows[h];
+            for (int r = h + 1; r < rows.Count; r++)
+            {
+                var row = rows[r];
+                bool summary = row.Count > 0 && Regex.IsMatch(row.FirstOrDefault(c => c.Length > 0) ?? "", SummaryRow, RegexOptions.IgnoreCase);
+                for (int c = 0; c < header.Count && c < row.Count; c++)
+                {
+                    var v = row[c];
+                    if (v.Length == 0) continue;
+                    if (Is(header[c], AmountHeader) && !Is(header[c], QtyHeader)) result.Amounts.Add(v);
+                    else if (summary) continue;
+                    else if (Is(header[c], DescHeader)) result.Descriptions.Add(v);
+                    else if (Is(header[c], QtyHeader)) result.Quantities.Add(v);
+                }
+            }
+        }
+        return result;
+    }
+
+    static bool Is(string header, string pattern) => Regex.IsMatch(header, $@"\b(?:{pattern})\b", RegexOptions.IgnoreCase);
+
+    static string CellText(JsonElement cell) =>
+        cell.TryGetProperty("Content", out var c) && c.TryGetProperty("Text", out var t) ? Regex.Replace(t.GetString() ?? "", @"\s+", " ").Trim() : "";
+
+    static IEnumerable<JsonElement> Tables(JsonElement el)
+    {
+        if (el.ValueKind == JsonValueKind.Object)
+        {
+            if (el.TryGetProperty("Type", out var t) && t.GetString() == "Table" && el.TryGetProperty("Rows", out _))
+                yield return el;
+            else foreach (var p in el.EnumerateObject()) foreach (var x in Tables(p.Value)) yield return x;
+        }
+        else if (el.ValueKind == JsonValueKind.Array)
+            foreach (var i in el.EnumerateArray()) foreach (var x in Tables(i)) yield return x;
+    }
 
     // "Label: value" on one line, or the label alone with the value on the next line.
     static string Labeled(List<string> lines, string label)
@@ -117,13 +178,9 @@ static class FieldParser
             var m = rx.Match(lines[i]);
             if (!m.Success) continue;
             var value = m.Groups[1].Value.Trim();
-            if (value.Length == 0 && i + 1 < lines.Count && !StartsWithAnyLabel(lines[i + 1]))
-                value = lines[i + 1].Trim();
+            if (value.Length == 0 && i + 1 < lines.Count) value = lines[i + 1].Trim();
             if (value.Length > 0) return value;
         }
         return "";
     }
-
-    static bool StartsWithAnyLabel(string line) =>
-        AllLabels.Any(l => Regex.IsMatch(line, $@"^\s*(?:{l})\b\s*:", RegexOptions.IgnoreCase));
 }

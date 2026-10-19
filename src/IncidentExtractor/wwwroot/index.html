@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Incident Data Extractor</title>
+  <title>Invoice Data Extractor</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link href="https://cdn.syncfusion.com/ej2/32.1.19/tailwind3.css" rel="stylesheet" />
   <script src="https://cdn.syncfusion.com/ej2/32.1.19/dist/ej2.min.js"></script>
@@ -20,7 +20,7 @@
 <body>
   <header>
     <input type="file" id="file" accept=".pdf,.png,.jpg,.jpeg" />
-    <span id="status">Select a PDF or screenshot to extract Name, Email Address and Date of Incident.</span>
+    <span id="status">Select an invoice (PDF or screenshot) to extract its key fields.</span>
   </header>
   <main>
     <section class="pane"><h3>Preview</h3><div id="viewer"></div></section>
@@ -41,9 +41,12 @@
     ej.grids.Grid.Inject(ej.grids.Edit, ej.grids.Toolbar);
     const grid = new ej.grids.Grid({
       dataSource: [
-        { Field: 'Name', Value: '' },
-        { Field: 'Email Address', Value: '' },
-        { Field: 'Date of Incident', Value: '' }
+        { Field: 'Supplier Name', Value: '' },
+        { Field: 'Invoice Number', Value: '' },
+        { Field: 'Invoice Date', Value: '' },
+        { Field: 'Description', Value: '' },
+        { Field: 'Quantities', Value: '' },
+        { Field: 'Monetary Amounts', Value: '' }
       ],
       editSettings: { allowEditing: true, mode: 'Batch' },
       toolbar: ['Update', 'Cancel'],

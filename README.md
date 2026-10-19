@@ -1,8 +1,8 @@
 # aspnet-core-OCR-bill-data-processing
 End-to-end receipt and invoice processing platform that combines OCR, employee validation, approval tracking, document storage, and Syncfusion Spreadsheet Editor integration.
 
-## Incident Extractor (`src/IncidentExtractor`)
-Upload a PDF or screenshot (PNG/JPG). The left pane previews it in the Syncfusion JavaScript PDF Viewer; the right pane shows **Name**, **Email Address** and **Date of Incident** in an editable Syncfusion Grid (JSON-bound).
+## Invoice Extractor (`src/IncidentExtractor`)
+Upload a PDF or screenshot (PNG/JPG). The left pane previews it in the Syncfusion JavaScript PDF Viewer; the right pane shows **Supplier Name**, **Invoice Number**, **Invoice Date**, **Description**, **Quantities** and **Monetary Amounts** in an editable Syncfusion Grid (JSON-bound).
 
 - Backend: ASP.NET Core minimal API (`POST /api/extract`) using Syncfusion Smart Data Extractor; images are wrapped into a PDF for preview and OCR.
 - Frontend: single `wwwroot/index.html`, native file input.

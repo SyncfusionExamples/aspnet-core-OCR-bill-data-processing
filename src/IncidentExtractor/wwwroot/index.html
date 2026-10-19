@@ -20,7 +20,7 @@
 <body>
   <header>
     <input type="file" id="file" accept=".pdf,.png,.jpg,.jpeg" />
-    <span id="status">Select an invoice (PDF or screenshot) to extract its key fields.</span>
+    <span id="status">Select an invoice (PDF or screenshot) to extract all key-value fields.</span>
   </header>
   <main>
     <section class="pane"><h3>Preview</h3><div id="viewer"></div></section>
@@ -40,18 +40,12 @@
 
     ej.grids.Grid.Inject(ej.grids.Edit, ej.grids.Toolbar);
     const grid = new ej.grids.Grid({
-      dataSource: [
-        { Field: 'Supplier Name', Value: '' },
-        { Field: 'Invoice Number', Value: '' },
-        { Field: 'Invoice Date', Value: '' },
-        { Field: 'Description', Value: '' },
-        { Field: 'Quantities', Value: '' },
-        { Field: 'Monetary Amounts', Value: '' }
-      ],
+      dataSource: [],
       editSettings: { allowEditing: true, mode: 'Batch' },
       toolbar: ['Update', 'Cancel'],
       columns: [
-        { field: 'Field', headerText: 'Field', width: 160, allowEditing: false, isPrimaryKey: true },
+        { field: 'Id', isPrimaryKey: true, visible: false },
+        { field: 'Key', headerText: 'Field', width: 200 },
         { field: 'Value', headerText: 'Value', width: 300 }
       ]
     });
@@ -77,7 +71,7 @@
         if (!res.ok) throw new Error(await res.text());
         const { fields, pdf } = await res.json();
         if (pdf) viewer.load(pdf, null);
-        grid.dataSource = fields.map(f => ({ Field: f.field, Value: f.value }));
+        grid.dataSource = fields.map((f, i) => ({ Id: i, Key: f.key, Value: f.value }));
         setStatus('Done. Double-click a value to edit.');
       } catch (err) {
         setStatus(err.message.replace(/^"|"$/g, ''), true);

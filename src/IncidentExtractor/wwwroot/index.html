@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Incident Data Extractor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://cdn.syncfusion.com/ej2/32.1.19/tailwind3.css" rel="stylesheet" />
+  <script src="https://cdn.syncfusion.com/ej2/32.1.19/dist/ej2.min.js"></script>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; }
+    header { padding: 12px 16px; border-bottom: 1px solid #ddd; display: flex; gap: 12px; align-items: center; }
+    #status { color: #555; }
+    #status.error { color: #c00; }
+    main { display: flex; height: calc(100vh - 62px); }
+    .pane { flex: 1; padding: 12px; min-width: 0; overflow: auto; }
+    .pane + .pane { border-left: 1px solid #ddd; }
+    h3 { margin: 0 0 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <input type="file" id="file" accept=".pdf,.png,.jpg,.jpeg" />
+    <span id="status">Select a PDF or screenshot to extract Name, Email Address and Date of Incident.</span>
+  </header>
+  <main>
+    <section class="pane"><h3>Preview</h3><div id="viewer"></div></section>
+    <section class="pane">
+      <h3>Extracted Data (editable)</h3>
+      <div id="grid"></div>
+      <button id="showJson" class="e-btn" style="margin-top:8px">Show JSON</button>
+      <pre id="json"></pre>
+    </section>
+  </main>
+
+  <script>
+    const viewer = new ej.pdfviewer.PdfViewer({
+      resourceUrl: 'https://cdn.syncfusion.com/ej2/32.1.19/dist/ej2-pdfviewer-lib',
+      height: 'calc(100vh - 130px)'
+    });
+    ej.pdfviewer.PdfViewer.Inject(ej.pdfviewer.Toolbar, ej.pdfviewer.Magnification, ej.pdfviewer.Navigation);
+    viewer.appendTo('#viewer');
+
+    ej.grids.Grid.Inject(ej.grids.Edit, ej.grids.Toolbar);
+    const grid = new ej.grids.Grid({
+      dataSource: [
+        { Field: 'Name', Value: '' },
+        { Field: 'Email Address', Value: '' },
+        { Field: 'Date of Incident', Value: '' }
+      ],
+      editSettings: { allowEditing: true, mode: 'Batch' },
+      toolbar: ['Update', 'Cancel'],
+      columns: [
+        { field: 'Field', headerText: 'Field', width: 160, allowEditing: false, isPrimaryKey: true },
+        { field: 'Value', headerText: 'Value', width: 300 }
+      ]
+    });
+    grid.appendTo('#grid');
+
+    const status = document.getElementById('status');
+    const setStatus = (t, err) => { status.textContent = t; status.className = err ? 'error' : ''; };
+
+    document.getElementById('file').addEventListener('change', async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      setStatus('Extracting...');
+      const body = new FormData();
+      body.append('file', file);
+      try {
+        const res = await fetch('/api/extract', { method: 'POST', body });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        viewer.load(data.pdf, null);
+        grid.dataSource = data.fields.map(f => ({ Field: f.field, Value: f.value }));
+        setStatus('Done. Double-click a value to edit.');
+      } catch (err) {
+        setStatus(err.message.replace(/^"|"$/g, ''), true);
+      }
+    });
+
+    document.getElementById('showJson').addEventListener('click', () => {
+      grid.editModule.batchSave();
+      document.getElementById('json').textContent = JSON.stringify(grid.dataSource, null, 2);
+    });
+  </script>
+</body>
+</html>

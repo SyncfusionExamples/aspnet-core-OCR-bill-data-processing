@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.150.5" />
+    <PackageReference Include="Syncfusion.Pdf.Net.Core" Version="35.1.40" />
+    <PackageReference Include="Syncfusion.SmartDataExtractor.Net.Core" Version="35.1.40" />
+  </ItemGroup>
+
+</Project>

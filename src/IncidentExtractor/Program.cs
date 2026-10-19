@@ -16,6 +16,11 @@ var app = builder.Build();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
+// One shared extractor: it loads ONNX models on creation, so building one per request is slow and can run out of memory
+// ("bad allocation"). Extractions run one at a time for the same reason.
+var extractor = new DataExtractor();
+var extractLock = new SemaphoreSlim(1, 1);
+
 // Extracts every key/value pair found in an uploaded PDF or image.
 // Returns { fields: [{ key, value }], pdf } where pdf is only set for images (the viewer can't open them directly).
 app.MapPost("/api/extract", async (IFormFile file) =>
@@ -28,10 +33,11 @@ app.MapPost("/api/extract", async (IFormFile file) =>
     await file.CopyToAsync(input);
     byte[] pdfBytes = ext == ".pdf" ? input.ToArray() : ImageToPdf(input);
 
+    await extractLock.WaitAsync();
     try
     {
         using var pdf = new MemoryStream(pdfBytes);
-        using var doc = JsonDocument.Parse(new DataExtractor().ExtractKeyValuePairs(pdf));
+        using var doc = JsonDocument.Parse(extractor.ExtractKeyValuePairs(pdf));
 
         var fields = doc.RootElement.GetProperty("Pages").EnumerateArray()
             .SelectMany(p => p.GetProperty("KeyValuePairs").EnumerateArray())
@@ -53,6 +59,7 @@ app.MapPost("/api/extract", async (IFormFile file) =>
     {
         return Results.BadRequest("Could not read the document: " + ex.Message);
     }
+    finally { extractLock.Release(); }
 }).DisableAntiforgery();
 
 // Receives the Spreadsheet's save request (JSON model) and returns the generated xlsx/xls/csv/pdf file.

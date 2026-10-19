@@ -129,7 +129,9 @@ static class FieldParser
         var result = new Items(new(), new(), new());
         foreach (var table in Tables(root))
         {
+            if (table.GetProperty("Rows").ValueKind != JsonValueKind.Array) continue;
             var rows = table.GetProperty("Rows").EnumerateArray()
+                .Where(r => r.ValueKind == JsonValueKind.Object && r.TryGetProperty("Cells", out var cs) && cs.ValueKind == JsonValueKind.Array)
                 .Select(r => r.GetProperty("Cells").EnumerateArray().Select(CellText).ToList()).ToList();
             int h = rows.FindIndex(r => r.Any(c => Is(c, DescHeader)) && r.Any(c => Is(c, QtyHeader) || Is(c, AmountHeader)));
             if (h < 0) continue;
@@ -155,13 +157,13 @@ static class FieldParser
     static bool Is(string header, string pattern) => Regex.IsMatch(header, $@"\b(?:{pattern})\b", RegexOptions.IgnoreCase);
 
     static string CellText(JsonElement cell) =>
-        cell.TryGetProperty("Content", out var c) && c.TryGetProperty("Text", out var t) ? Regex.Replace(t.GetString() ?? "", @"\s+", " ").Trim() : "";
+        cell.TryGetProperty("Content", out var c) && c.ValueKind == JsonValueKind.Object && c.TryGetProperty("Text", out var t) && t.ValueKind == JsonValueKind.String ? Regex.Replace(t.GetString() ?? "", @"\s+", " ").Trim() : "";
 
     static IEnumerable<JsonElement> Tables(JsonElement el)
     {
         if (el.ValueKind == JsonValueKind.Object)
         {
-            if (el.TryGetProperty("Type", out var t) && t.GetString() == "Table" && el.TryGetProperty("Rows", out _))
+            if (el.TryGetProperty("Type", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() == "Table" && el.TryGetProperty("Rows", out _))
                 yield return el;
             else foreach (var p in el.EnumerateObject()) foreach (var x in Tables(p.Value)) yield return x;
         }

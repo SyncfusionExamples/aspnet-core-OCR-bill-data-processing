@@ -16,10 +16,31 @@ var app = builder.Build();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-// One shared extractor: it loads ONNX models on creation, so building one per request is slow and can run out of memory
-// ("bad allocation"). Extractions run one at a time for the same reason.
-var extractor = new DataExtractor();
+// One shared extractor, created on first use: it loads large ONNX models, so building one per request is slow and can run
+// out of memory ("bad allocation"). Extractions run one at a time for the same reason. If a model fails to load, the
+// extractor is discarded and rebuilt on the next attempt, because a half-initialised instance keeps failing.
+DataExtractor? extractor = null;
 var extractLock = new SemaphoreSlim(1, 1);
+
+string ExtractKeyValues(byte[] pdfBytes)
+{
+    for (var attempt = 1; ; attempt++)
+    {
+        try
+        {
+            extractor ??= new DataExtractor();
+            using var pdf = new MemoryStream(pdfBytes);
+            return extractor.ExtractKeyValuePairs(pdf);
+        }
+        catch (Exception ex) when (attempt == 1 && ex.Message.Contains("bad allocation", StringComparison.OrdinalIgnoreCase))
+        {
+            extractor = null;
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
+    }
+}
 
 // Extracts every key/value pair found in an uploaded PDF or image.
 // Returns { fields: [{ key, value }], pdf } where pdf is only set for images (the viewer can't open them directly).
@@ -36,8 +57,7 @@ app.MapPost("/api/extract", async (IFormFile file) =>
     await extractLock.WaitAsync();
     try
     {
-        using var pdf = new MemoryStream(pdfBytes);
-        using var doc = JsonDocument.Parse(extractor.ExtractKeyValuePairs(pdf));
+        using var doc = JsonDocument.Parse(ExtractKeyValues(pdfBytes));
 
         var fields = doc.RootElement.GetProperty("Pages").EnumerateArray()
             .SelectMany(p => p.GetProperty("KeyValuePairs").EnumerateArray())

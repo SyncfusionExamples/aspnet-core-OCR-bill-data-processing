@@ -17,7 +17,7 @@ app.UseStaticFiles();
 
 string[] imageTypes = { ".png", ".jpg", ".jpeg" };
 
-// Accepts an image or PDF. Returns a PDF data URI for the viewer plus the three extracted fields.
+// Accepts an image or PDF and returns the three extracted fields. PDFs are previewed by the browser directly, so a converted PDF is returned only for images.
 app.MapPost("/api/extract", async (IFormFile file) =>
 {
     var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
@@ -27,7 +27,7 @@ app.MapPost("/api/extract", async (IFormFile file) =>
     using var input = new MemoryStream();
     await file.CopyToAsync(input);
 
-    // Images are wrapped into a single-page PDF so the PDF Viewer can show them and the extractor can read them.
+    // Images are wrapped into a single-page PDF so the extractor can read them.
     byte[] pdfBytes = ext == ".pdf" ? input.ToArray() : ImageToPdf(input);
 
     string json;
@@ -47,8 +47,8 @@ app.MapPost("/api/extract", async (IFormFile file) =>
 
     return Results.Json(new
     {
-        pdf = "data:application/pdf;base64," + Convert.ToBase64String(pdfBytes),
-        fields = FieldParser.Parse(lines)
+        fields = FieldParser.Parse(lines),
+        pdf = ext == ".pdf" ? null : "data:application/pdf;base64," + Convert.ToBase64String(pdfBytes)
     });
 }).DisableAntiforgery();
 
@@ -94,35 +94,36 @@ record FieldRow(string Field, string Value);
 
 static class FieldParser
 {
-    static readonly Regex Email = new(@"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", RegexOptions.Compiled);
-    static readonly Regex Date = new(@"\d{4}-\d{2}-\d{2}|\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?,?\s+\d{4}", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Labels are matched loosely; the value is whatever text follows, with no type/format validation
+    // (dates may be in any format or handwritten, so the raw OCR text is returned for the user to correct).
+    const string NameLabel = @"(?:full\s+)?name";
+    const string EmailLabel = @"e-?mail(?:\s+address)?";
+    const string DateLabel = @"date\s+of\s+(?:the\s+)?(?:incident|accident|loss)|incident\s+date|date(?=\s*:)";
+    static readonly string[] AllLabels = { NameLabel, EmailLabel, DateLabel };
 
-    public static List<FieldRow> Parse(List<string> lines)
+    public static List<FieldRow> Parse(List<string> lines) => new()
     {
-        var text = string.Join("\n", lines);
-        var name = Labeled(lines, @"(?:full\s+)?name", null) ?? "";
-        var email = Labeled(lines, @"e-?mail(?:\s+address)?", Email) ?? Email.Match(text).Value;
-        var date = Labeled(lines, @"date\s+of\s+(?:the\s+)?incident|incident\s+date", Date) ?? "";
-        return new() { new("Name", name), new("Email Address", email), new("Date of Incident", date) };
-    }
+        new("Name", Labeled(lines, NameLabel)),
+        new("Email Address", Labeled(lines, EmailLabel)),
+        new("Date of Incident", Labeled(lines, DateLabel))
+    };
 
     // "Label: value" on one line, or the label alone with the value on the next line.
-    static string? Labeled(List<string> lines, string label, Regex? valuePattern)
+    static string Labeled(List<string> lines, string label)
     {
-        var rx = new Regex($@"^\s*(?:{label})\s*[:\-]?\s*(.*)$", RegexOptions.IgnoreCase);
+        var rx = new Regex($@"^\s*(?:{label})\b\s*[:\-]?\s*(.*)$", RegexOptions.IgnoreCase);
         for (int i = 0; i < lines.Count; i++)
         {
             var m = rx.Match(lines[i]);
             if (!m.Success) continue;
-            var candidate = m.Groups[1].Value.Trim();
-            if (candidate.Length == 0 && i + 1 < lines.Count) candidate = lines[i + 1].Trim();
-            if (valuePattern != null)
-            {
-                var v = valuePattern.Match(candidate);
-                if (v.Success) return v.Value;
-            }
-            else if (candidate.Length > 0) return candidate;
+            var value = m.Groups[1].Value.Trim();
+            if (value.Length == 0 && i + 1 < lines.Count && !StartsWithAnyLabel(lines[i + 1]))
+                value = lines[i + 1].Trim();
+            if (value.Length > 0) return value;
         }
-        return null;
+        return "";
     }
+
+    static bool StartsWithAnyLabel(string line) =>
+        AllLabels.Any(l => Regex.IsMatch(line, $@"^\s*(?:{l})\b\s*:", RegexOptions.IgnoreCase));
 }

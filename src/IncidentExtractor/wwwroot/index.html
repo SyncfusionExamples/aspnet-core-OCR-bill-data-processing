@@ -11,15 +11,22 @@
     header { padding: 12px 16px; border-bottom: 1px solid #ddd; display: flex; gap: 12px; align-items: center; }
     #status { color: #555; }
     #status.error { color: #c00; }
-    main { display: flex; height: calc(100vh - 62px); }
-    .pane { flex: 1; padding: 12px; min-width: 0; overflow: auto; }
+    main { display: flex; height: 70vh; }
+    .pane { flex: 1; padding: 12px; min-width: 0; overflow: auto; position: relative; }
     .pane + .pane { border-left: 1px solid #ddd; }
     h3 { margin: 0 0 8px; }
+    #review { margin-top: 12px; }
+    #sheetSection { display: none; padding: 12px; border-top: 1px solid #ddd; }
+    #spinner { display: none; position: fixed; inset: 0; background: rgba(255,255,255,.7); z-index: 1000;
+               align-items: center; justify-content: center; gap: 12px; font-weight: 600; }
+    #spinner.on { display: flex; }
+    #spinner i { width: 28px; height: 28px; border: 4px solid #ddd; border-top-color: #4f46e5; border-radius: 50%; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
   <header>
-    <input type="file" id="file" accept=".pdf,.png,.jpg,.jpeg" />
+    <input type="file" id="upload" />
     <span id="status">Select an invoice (PDF or screenshot) to extract all key-value fields.</span>
   </header>
   <main>
@@ -27,22 +34,31 @@
     <section class="pane">
       <h3>Extracted Data (editable)</h3>
       <div id="grid"></div>
+      <button id="review" class="e-btn e-primary" disabled>Review complete – send to Spreadsheet</button>
     </section>
   </main>
+  <section id="sheetSection">
+    <h3>Spreadsheet (use File &gt; Save As to download)</h3>
+    <div id="spreadsheet"></div>
+  </section>
+  <div id="spinner"><i></i><span>Extracting, please wait...</span></div>
 
   <script>
-    const viewer = new ej.pdfviewer.PdfViewer({
-      resourceUrl: 'https://cdn.syncfusion.com/ej2/32.1.19/dist/ej2-pdfviewer-lib',
-      height: 'calc(100vh - 130px)'
-    });
+    const CDN = 'https://cdn.syncfusion.com/ej2/32.1.19/dist/ej2-pdfviewer-lib';
+    const $ = id => document.getElementById(id);
+    const setStatus = (t, err) => { $('status').textContent = t; $('status').className = err ? 'error' : ''; };
+
+    // Preview
+    const viewer = new ej.pdfviewer.PdfViewer({ resourceUrl: CDN, height: 'calc(70vh - 50px)' });
     ej.pdfviewer.PdfViewer.Inject(ej.pdfviewer.Toolbar, ej.pdfviewer.Magnification, ej.pdfviewer.Navigation);
     viewer.appendTo('#viewer');
 
+    // Editable grid; rows can be edited inline and deleted completely.
     ej.grids.Grid.Inject(ej.grids.Edit, ej.grids.Toolbar);
     const grid = new ej.grids.Grid({
       dataSource: [],
-      editSettings: { allowEditing: true, mode: 'Batch' },
-      toolbar: ['Update', 'Cancel'],
+      editSettings: { allowEditing: true, allowDeleting: true, mode: 'Normal' },
+      toolbar: ['Edit', 'Delete', 'Update', 'Cancel'],
       columns: [
         { field: 'Id', isPrimaryKey: true, visible: false },
         { field: 'Key', headerText: 'Field', width: 200 },
@@ -51,33 +67,63 @@
     });
     grid.appendTo('#grid');
 
-    const status = document.getElementById('status');
-    const setStatus = (t, err) => { status.textContent = t; status.className = err ? 'error' : ''; };
+    // Native-look Syncfusion Uploader; file handled in the `selected` event (no upload endpoint).
+    const uploader = new ej.inputs.Uploader({
+      autoUpload: false,
+      multiple: false,
+      showFileList: false,
+      allowedExtensions: '.pdf,.png,.jpg,.jpeg',
+      selected: onSelect
+    });
+    uploader.appendTo('#upload');
 
-    document.getElementById('file').addEventListener('change', async e => {
-      const file = e.target.files[0];
+    async function onSelect(args) {
+      const file = args.filesData[0] && args.filesData[0].rawFile;
       if (!file) return;
+      $('review').disabled = true;
+      $('sheetSection').style.display = 'none';
+      grid.dataSource = [];
       setStatus('Extracting...');
-      const body = new FormData();
-      body.append('file', file);
+      $('spinner').classList.add('on');
+
       // PDFs open directly in the viewer; images are shown from the PDF the server returns.
       if (file.type === 'application/pdf') {
         const reader = new FileReader();
         reader.onload = () => viewer.load(reader.result, null);
         reader.readAsDataURL(file);
       }
+      const body = new FormData();
+      body.append('file', file);
       try {
         const res = await fetch('/api/extract', { method: 'POST', body });
         if (!res.ok) throw new Error(await res.text());
         const { fields, pdf } = await res.json();
         if (pdf) viewer.load(pdf, null);
         grid.dataSource = fields.map((f, i) => ({ Id: i, Key: f.key, Value: f.value }));
-        setStatus('Done. Double-click a value to edit.');
+        $('review').disabled = false;
+        setStatus('Done. Edit values or select a row and Delete it.');
       } catch (err) {
         setStatus(err.message.replace(/^"|"$/g, ''), true);
+      } finally {
+        $('spinner').classList.remove('on');
       }
-    });
+    }
 
+    // Review finished: push the grid's current rows into the Spreadsheet.
+    let sheet;
+    $('review').onclick = () => {
+      if (grid.isEdit) grid.endEdit();
+      const rows = grid.dataSource.map(r => ({ Field: r.Key, Value: r.Value }));
+      if (sheet) sheet.destroy();
+      sheet = new ej.spreadsheet.Spreadsheet({
+        height: 380,
+        saveUrl: '/api/spreadsheet/save',
+        sheets: [{ name: 'Extracted Data', ranges: [{ dataSource: rows }] }]
+      });
+      $('sheetSection').style.display = 'block';
+      sheet.appendTo('#spreadsheet');
+      $('sheetSection').scrollIntoView({ behavior: 'smooth' });
+    };
   </script>
 </body>
 </html>

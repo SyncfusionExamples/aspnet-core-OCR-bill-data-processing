@@ -1,6 +1,8 @@
+using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
 using Syncfusion.Drawing;
 using Syncfusion.Licensing;
+using Syncfusion.EJ2.Spreadsheet;
 using Syncfusion.Pdf;
 using Syncfusion.Pdf.Graphics;
 using Syncfusion.SmartDataExtractor;
@@ -51,6 +53,13 @@ app.MapPost("/api/extract", async (IFormFile file) =>
     {
         return Results.BadRequest("Could not read the document: " + ex.Message);
     }
+}).DisableAntiforgery();
+
+// Receives the Spreadsheet's save request (JSON model) and returns the generated xlsx/xls/csv/pdf file.
+app.MapPost("/api/spreadsheet/save", ([FromForm] SaveSettings settings) =>
+{
+    var file = (FileStreamResult)Workbook.Save(settings);
+    return Results.File(file.FileStream, file.ContentType, file.FileDownloadName);
 }).DisableAntiforgery();
 
 app.Run();

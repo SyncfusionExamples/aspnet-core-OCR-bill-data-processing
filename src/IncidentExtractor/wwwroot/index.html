@@ -152,7 +152,8 @@
         const paneHeight = () => wide() ? 'calc(100vh - 170px)' : '480px';
         const setStatus = (t, err) => { $('status').textContent = t; $('status').className = err ? 'error' : ''; };
         const busy = (on, text) => { $('spinnerText').textContent = text || 'Extracting, please wait...'; $('spinner').classList.toggle('on', on); };
-
+        // Registering Syncfusion license key
+        ej.base.registerLicense('SYNCFUSION_LICENSE_KEY');
         // PDF / image preview
         ej.pdfviewer.PdfViewer.Inject(ej.pdfviewer.Toolbar, ej.pdfviewer.Magnification, ej.pdfviewer.Navigation);
         const viewer = new ej.pdfviewer.PdfViewer({

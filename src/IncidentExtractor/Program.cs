@@ -7,7 +7,7 @@ using Syncfusion.Pdf;
 using Syncfusion.Pdf.Graphics;
 using Syncfusion.SmartDataExtractor;
 
-var licenseKey = Environment.GetEnvironmentVariable("SYNCFUSION_LICENSE_KEY");
+var licenseKey = "SYNCFUSION_LICENSE_KEY";
 if (!string.IsNullOrEmpty(licenseKey)) SyncfusionLicenseProvider.RegisterLicense(licenseKey);
 
 var builder = WebApplication.CreateBuilder(args);
@@ -75,11 +75,11 @@ app.MapPost("/api/extract", async (IFormFile file) =>
     using var input = new MemoryStream();
     await file.CopyToAsync(input);
     byte[] pdfBytes = ext == ".pdf" ? input.ToArray() : ImageToPdf(input);
-
+    byte[] inputBytes = input.ToArray();
     await extractLock.WaitAsync();
     try
     {
-        using var doc = JsonDocument.Parse(ExtractKeyValues(pdfBytes));
+        using var doc = JsonDocument.Parse(ExtractKeyValues(inputBytes));
 
         var fields = doc.RootElement.GetProperty("Pages").EnumerateArray()
             .SelectMany(p => p.GetProperty("KeyValuePairs").EnumerateArray())

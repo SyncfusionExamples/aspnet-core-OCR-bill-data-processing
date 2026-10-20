@@ -13,6 +13,28 @@ if (!string.IsNullOrEmpty(licenseKey)) SyncfusionLicenseProvider.RegisterLicense
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 20 * 1024 * 1024);
 var app = builder.Build();
+
+// Virtual-directory base path used when this demo is published under a shared Azure App Service
+// site (for example https://<host>/aspnet-core-ocr-bill-data-processing). Set the
+// ASPNETCORE_PATHBASE app setting if the published path differs from PathBase in appsettings.json.
+var pathBase = Environment.GetEnvironmentVariable("ASPNETCORE_PATHBASE") ?? app.Configuration["PathBase"];
+if (!string.IsNullOrWhiteSpace(pathBase))
+{
+    if (!pathBase.StartsWith('/')) pathBase = "/" + pathBase;
+    pathBase = pathBase.TrimEnd('/');
+    app.UsePathBase(pathBase);
+    // On a shared Azure site this app must not also answer at the site root.
+    app.Use(async (context, next) =>
+    {
+        if (!context.Request.PathBase.HasValue)
+        {
+            context.Response.Redirect(pathBase + context.Request.Path + context.Request.QueryString);
+            return;
+        }
+        await next();
+    });
+}
+
 app.UseDefaultFiles();
 app.UseStaticFiles();
 

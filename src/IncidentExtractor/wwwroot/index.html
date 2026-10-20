@@ -137,6 +137,16 @@
     <div id="dialog"><div id="spreadsheet"></div></div>
 
     <script>
+        // Honor the published virtual directory (PathBase). Root-relative fetches would miss
+        // /api/* when the app is hosted under /aspnet-core-ocr-bill-data-processing on Azure.
+        const basePath = (() => {
+            const path = location.pathname.replace(/\/+$/, '');
+            const marker = '/aspnet-core-ocr-bill-data-processing';
+            const at = path.toLowerCase().indexOf(marker);
+            return at >= 0 ? path.slice(0, at + marker.length) : '';
+        })();
+        const apiUrl = path => basePath + path;
+
         const $ = id => document.getElementById(id);
         const wide = () => innerWidth > 900;
         const paneHeight = () => wide() ? 'calc(100vh - 170px)' : '480px';

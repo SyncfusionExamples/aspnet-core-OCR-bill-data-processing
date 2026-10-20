@@ -6,7 +6,8 @@ Upload a PDF or screenshot (PNG/JPG). The left pane previews it in the Syncfusio
 
 - Backend: one minimal API endpoint (`POST /api/extract`, `Program.cs`) calling Syncfusion Smart Data Extractor `ExtractKeyValuePairs`. Images are wrapped into a PDF for OCR and preview.
 - Frontend: single `wwwroot/index.html`, native file input.
-- Run: `cd src/IncidentExtractor && SYNCFUSION_LICENSE_KEY=<key> dotnet run`
+- Base path: `/aspnet-core-ocr-bill-data-processing` (`PathBase` in `appsettings.json`). The app is intended to be published on Azure App Service as a virtual application with that name, so the demo is served at `https://<your-app>.azurewebsites.net/aspnet-core-ocr-bill-data-processing/`. API calls in the page are prefixed with that path. Override with the `ASPNETCORE_PATHBASE` app setting if the published path differs. `web.config` sets the same value for Windows/IIS hosting.
+- Run: `cd src/IncidentExtractor && SYNCFUSION_LICENSE_KEY=<key> dotnet run` then open `http://localhost:5052/aspnet-core-ocr-bill-data-processing/`
 - Linux hosting: the project references `SkiaSharp.NativeAssets.Linux.NoDependencies` (4.150.x, must match the SkiaSharp version used by Syncfusion).
 
 - The `DataExtractor` is created once and calls are serialized: it loads ONNX models on creation, and creating one per request can fail with `onnxruntime ... bad allocation` on low-memory hosts. Run as 64-bit.

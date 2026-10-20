@@ -13,6 +13,34 @@ if (!string.IsNullOrEmpty(licenseKey)) SyncfusionLicenseProvider.RegisterLicense
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 20 * 1024 * 1024);
 var app = builder.Build();
+
+// Virtual-directory base path used when this demo is published under a shared Azure App Service
+// site (for example https://<host>/aspnet-core-ocr-bill-data-processing). Set the
+// ASPNETCORE_PATHBASE app setting if the published path differs from PathBase in appsettings.json.
+var pathBase = Environment.GetEnvironmentVariable("ASPNETCORE_PATHBASE") ?? app.Configuration["PathBase"];
+if (!string.IsNullOrWhiteSpace(pathBase))
+{
+    if (!pathBase.StartsWith('/')) pathBase = "/" + pathBase;
+    pathBase = pathBase.TrimEnd('/');
+    app.UsePathBase(pathBase);
+    // Keep the app on its virtual directory, but do not redirect browser-refresh
+    // WebSockets (dotnet watch / Visual Studio). A redirect there is reported as
+    // "Page entered Back-Forward Cache" when the refresh socket closes.
+    app.Use(async (context, next) =>
+    {
+        if (context.Request.PathBase.HasValue ||
+            context.WebSockets.IsWebSocketRequest ||
+            context.Request.Path.StartsWithSegments("/_framework"))
+        {
+            await next();
+            return;
+        }
+
+        var destination = pathBase + context.Request.PathBase + context.Request.Path + context.Request.QueryString;
+        context.Response.Redirect(destination);
+    });
+}
+
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
@@ -53,11 +81,11 @@ app.MapPost("/api/extract", async (IFormFile file) =>
     using var input = new MemoryStream();
     await file.CopyToAsync(input);
     byte[] pdfBytes = ext == ".pdf" ? input.ToArray() : ImageToPdf(input);
-
+    byte[] inputBytes = input.ToArray();
     await extractLock.WaitAsync();
     try
     {
-        using var doc = JsonDocument.Parse(ExtractKeyValues(pdfBytes));
+        using var doc = JsonDocument.Parse(ExtractKeyValues(inputBytes));
 
         var fields = doc.RootElement.GetProperty("Pages").EnumerateArray()
             .SelectMany(p => p.GetProperty("KeyValuePairs").EnumerateArray())

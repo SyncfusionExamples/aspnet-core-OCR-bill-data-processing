@@ -137,12 +137,23 @@
     <div id="dialog"><div id="spreadsheet"></div></div>
 
     <script>
+        // Honor the published virtual directory (PathBase). Root-relative fetches would miss
+        // /api/* when the app is hosted under /aspnet-core-ocr-bill-data-processing on Azure.
+        const basePath = (() => {
+            const path = location.pathname.replace(/\/+$/, '');
+            const marker = '/aspnet-core-ocr-bill-data-processing';
+            const at = path.toLowerCase().indexOf(marker);
+            return at >= 0 ? path.slice(0, at + marker.length) : '';
+        })();
+        const apiUrl = path => basePath + path;
+
         const $ = id => document.getElementById(id);
         const wide = () => innerWidth > 900;
         const paneHeight = () => wide() ? 'calc(100vh - 170px)' : '480px';
         const setStatus = (t, err) => { $('status').textContent = t; $('status').className = err ? 'error' : ''; };
         const busy = (on, text) => { $('spinnerText').textContent = text || 'Extracting, please wait...'; $('spinner').classList.toggle('on', on); };
-
+        // Registering Syncfusion license key
+        ej.base.registerLicense('SYNCFUSION_LICENSE_KEY');
         // PDF / image preview
         ej.pdfviewer.PdfViewer.Inject(ej.pdfviewer.Toolbar, ej.pdfviewer.Magnification, ej.pdfviewer.Navigation);
         const viewer = new ej.pdfviewer.PdfViewer({
@@ -185,7 +196,7 @@
             open: () => {
                 sheet = new ej.spreadsheet.Spreadsheet({
                     height: '100%',
-                    saveUrl: '/api/spreadsheet/save',
+                    saveUrl: apiUrl('/api/spreadsheet/save'),
                     sheets: [{ name: 'Extracted Data', ranges: [{ dataSource: dialog.rows }] }]
                 });
                 sheet.appendTo('#spreadsheet');
@@ -224,7 +235,7 @@
                 const body = new FormData();
                 body.append('file', file);
                 try {
-                    const res = await fetch('/api/extract', { method: 'POST', body });
+                    const res = await fetch(apiUrl('/api/extract'), { method: 'POST', body });
                     if (!res.ok) throw new Error(await res.text());
                     const { fields, pdf } = await res.json();
                     if (pdf) viewer.load(pdf, null);

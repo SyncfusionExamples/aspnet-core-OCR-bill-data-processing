@@ -7,7 +7,7 @@ using Syncfusion.Pdf;
 using Syncfusion.Pdf.Graphics;
 using Syncfusion.SmartDataExtractor;
 
-var licenseKey = "SYNCFUSION_LICENSE_KEY";
+var licenseKey = Environment.GetEnvironmentVariable("SYNCFUSION_LICENSE_KEY");
 if (!string.IsNullOrEmpty(licenseKey)) SyncfusionLicenseProvider.RegisterLicense(licenseKey);
 
 var builder = WebApplication.CreateBuilder(args);

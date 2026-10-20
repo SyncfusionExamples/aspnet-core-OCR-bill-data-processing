@@ -23,15 +23,21 @@ if (!string.IsNullOrWhiteSpace(pathBase))
     if (!pathBase.StartsWith('/')) pathBase = "/" + pathBase;
     pathBase = pathBase.TrimEnd('/');
     app.UsePathBase(pathBase);
-    // On a shared Azure site this app must not also answer at the site root.
+    // Keep the app on its virtual directory, but do not redirect browser-refresh
+    // WebSockets (dotnet watch / Visual Studio). A redirect there is reported as
+    // "Page entered Back-Forward Cache" when the refresh socket closes.
     app.Use(async (context, next) =>
     {
-        if (!context.Request.PathBase.HasValue)
+        if (context.Request.PathBase.HasValue ||
+            context.WebSockets.IsWebSocketRequest ||
+            context.Request.Path.StartsWithSegments("/_framework"))
         {
-            context.Response.Redirect(pathBase + context.Request.Path + context.Request.QueryString);
+            await next();
             return;
         }
-        await next();
+
+        var destination = pathBase + context.Request.PathBase + context.Request.Path + context.Request.QueryString;
+        context.Response.Redirect(destination);
     });
 }
 

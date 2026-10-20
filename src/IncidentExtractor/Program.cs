@@ -9,7 +9,6 @@ using Syncfusion.SmartDataExtractor;
 
 var licenseKey = "SYNCFUSION_LICENSE_KEY";
 if (!string.IsNullOrEmpty(licenseKey)) SyncfusionLicenseProvider.RegisterLicense(licenseKey);
-
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 20 * 1024 * 1024);
 var app = builder.Build();

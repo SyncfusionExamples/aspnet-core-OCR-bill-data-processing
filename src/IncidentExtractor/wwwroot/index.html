@@ -196,7 +196,7 @@
             open: () => {
                 sheet = new ej.spreadsheet.Spreadsheet({
                     height: '100%',
-                    saveUrl: '/api/spreadsheet/save',
+                    saveUrl: apiUrl('/api/spreadsheet/save'),
                     sheets: [{ name: 'Extracted Data', ranges: [{ dataSource: dialog.rows }] }]
                 });
                 sheet.appendTo('#spreadsheet');
@@ -235,7 +235,7 @@
                 const body = new FormData();
                 body.append('file', file);
                 try {
-                    const res = await fetch('/api/extract', { method: 'POST', body });
+                    const res = await fetch(apiUrl('/api/extract'), { method: 'POST', body });
                     if (!res.ok) throw new Error(await res.text());
                     const { fields, pdf } = await res.json();
                     if (pdf) viewer.load(pdf, null);

@@ -21,70 +21,62 @@ There is no database, user account, approval workflow, or document archive. Extr
 
 ### Document upload
 
-The header uses the Syncfusion Uploader. A file can be chosen or dropped on the header. Only one file is accepted, and the control does not upload it itself — the `selected` handler posts it to the extract API.
+The header uses the Syncfusion Uploader. A file can be chosen or dropped on the header. Only one file is accepted, and the control does not upload it itself — the `selected` handler posts it to the extract API. Two header checkboxes are sent with the file:
+
+- **Enable Table** (on by default) sets `DataExtractor.EnableTableDetection`.
+- **Image Enhance** (off by default). When off, the OCR processor runs with `OcrImageEnhancementMode.None`.
 
 ```javascript
-new ej.inputs.Uploader({
-    dropArea: '#top-wrapper',
-    autoUpload: false,
-    multiple: false,
-    allowedExtensions: 'image/*,.pdf',
-    selected: async args => {
-        const file = args.filesData[0] && args.filesData[0].rawFile;
-        const body = new FormData();
-        body.append('file', file);
-        const res = await fetch(apiUrl('/api/extract'), { method: 'POST', body });
-        const { fields, pdf } = await res.json();
-        grid.dataSource = fields.map((f, i) => ({ Id: i, Key: f.key, Value: f.value }));
-    }
-}, '#upload');
+const body = new FormData();
+body.append('file', file);
+body.append('enableTable', $('enableTable').checked);
+body.append('imageEnhance', $('imageEnhance').checked);
+const res = await fetch(apiUrl('/api/extract'), { method: 'POST', body });
+const { id } = await res.json();
+// then poll GET /api/extract/{id} every 2 seconds until status is done or failed
 ```
 
 The server accepts `.pdf`, `.png`, `.jpg`, and `.jpeg`, and rejects anything else. The request body limit is 20 MB.
 
-### Key-value extraction
+### Key-value extraction (queued jobs)
 
-`POST /api/extract` calls `DataExtractor.ExtractKeyValuePairs`. The extractor is created once and guarded by a semaphore. The ONNX models it loads are large, so a new instance per request can fail with `bad allocation` on a small host. A failed allocation drops the instance, collects, and retries once.
+Large documents can take longer than an Azure gateway allows (about 230 seconds), which would surface as a 504. So extraction is asynchronous:
 
-PDF bytes are sent to the extractor as uploaded. An image is also converted to a one-page PDF so the PDF Viewer can display it; that converted PDF is returned as a base64 data URL.
+1. `POST /api/extract` validates the file, converts an image to a one-page PDF, creates an `ExtractJob`, queues it, and returns `202 Accepted` with `{ id }`.
+2. A single background worker reads the queue and runs `DataExtractor.ExtractKeyValuePairs` for one job at a time.
+3. The browser polls `GET /api/extract/{id}`, which returns `{ status, result, error }`. `status` is `queued`, `processing`, `done`, or `failed`. An unknown or expired id returns 404.
+4. Finished jobs are removed from memory after 30 minutes, and the uploaded bytes are released as soon as a job finishes.
+
+The extractor is created once on first use. The ONNX models it loads are large, so a new instance per request can fail with `bad allocation` on a small host. A failed allocation drops the instance, collects, and retries once. A semaphore keeps extractions one at a time.
 
 ```csharp
-app.MapPost("/api/extract", async (IFormFile file) =>
+app.MapPost("/api/extract", async ([FromForm] IFormFile file, [FromForm] bool enableTable, [FromForm] bool imageEnhance) =>
 {
     var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
     if (ext is not (".pdf" or ".png" or ".jpg" or ".jpeg"))
         return Results.BadRequest("Only PDF, PNG and JPG files are supported.");
 
-    using var input = new MemoryStream();
-    await file.CopyToAsync(input);
-    byte[] pdfBytes = ext == ".pdf" ? input.ToArray() : ImageToPdf(input);
+    // ... copy the upload, build pdfBytes (images go through ImageToPdf) ...
 
-    using var doc = JsonDocument.Parse(ExtractKeyValues(input.ToArray()));
-    var fields = doc.RootElement.GetProperty("Pages").EnumerateArray()
-        .SelectMany(p => p.GetProperty("KeyValuePairs").EnumerateArray())
-        .Select(kv => new
-        {
-            key = kv.GetProperty("Key").GetString()?.Trim().TrimEnd(':').Trim(),
-            value = kv.GetProperty("Value").GetString()?.Trim()
-        })
-        .Where(f => !string.IsNullOrEmpty(f.key))
-        .ToList();
+    var job = new ExtractJob { Id = Guid.NewGuid().ToString("N"), /* bytes, flags */ };
+    jobs[job.Id] = job;
+    await queue.Writer.WriteAsync(job);
+    return Results.Accepted(value: new { id = job.Id });
+}).DisableAntiforgery();
 
-    return Results.Json(new
-    {
-        fields,
-        pdf = ext == ".pdf" ? null : "data:application/pdf;base64," + Convert.ToBase64String(pdfBytes)
-    });
-});
+app.MapGet("/api/extract/{id}", (string id) =>
+    jobs.TryGetValue(id, out var job)
+        ? Results.Json(new { status = job.Status, result = job.Result, error = job.Error })
+        : Results.NotFound("Extraction job not found or expired. Please upload the file again."));
 ```
 
-The JSON shape is `{ fields: [{ key, value }], pdf }`. `pdf` is set only for images.
+The finished `result` has the shape `{ fields: [{ key, value }], pdf }`. Keys are trimmed and a trailing `:` is removed; pairs with an empty key are dropped. `pdf` is a base64 data URL of the converted PDF and is set only for images. If extraction throws, the job ends as `failed` with the message `Could not read the document: ...`.
 
 ### Preview, review, and export
 
-- **Preview.** The Syncfusion PDF Viewer loads a PDF from the browser. For an image, it loads the PDF returned by the extract API.
-- **Review.** A Syncfusion Grid lists `Key` and `Value`. Rows can be edited or deleted. A spinner covers the page while extraction runs.
-- **Export.** **Review complete** copies the grid into a modal Spreadsheet named `Extracted Data`. **File > Save As** posts the workbook to `POST /api/spreadsheet/save`, which returns the generated file through `Workbook.Save`.
+- **Preview.** The Syncfusion PDF Viewer loads a PDF from the browser. For an image, it loads the PDF returned by the finished job.
+- **Review.** A Syncfusion Grid lists `Key` (shown as Field) and `Value`. Rows can be edited or deleted. A spinner covers the page while the job is queued ("Waiting in queue...") or running ("Extracting, please wait..."). Transient 502/503/504 poll responses are retried.
+- **Export.** **Review complete** copies the grid (as `Field` and `Value` columns) into a modal Spreadsheet named `Extracted Data`. **File > Save As** posts the workbook to `POST /api/spreadsheet/save`, which returns the generated file through `Workbook.Save`.
 
 ```javascript
 sheet = new ej.spreadsheet.Spreadsheet({
@@ -123,7 +115,7 @@ Published URL:
 
 `https://<your-app>.azurewebsites.net/aspnet-core-ocr-bill-data-processing/`
 
-Add the virtual application in Azure with that path name, and set the `SYNCFUSION_LICENSE_KEY` app setting to a valid license key.
+Add the virtual application in Azure with that path name, and set the `SYNCFUSION_LICENSE_KEY` app setting (environment variable) to a valid license key.
 
 ## Workflow
 
@@ -135,13 +127,15 @@ Uploader selected handler
         |
         +--> PDF: load the file in the PDF Viewer
         |
-        +--> POST /api/extract
+        +--> POST /api/extract (+ enableTable, imageEnhance) --> 202 { id }
                  |
                  +--> image: wrap it in a one-page PDF for preview
                  |
-                 +--> DataExtractor.ExtractKeyValuePairs
+                 +--> background worker: DataExtractor.ExtractKeyValuePairs
+        |
+        +--> poll GET /api/extract/{id} every 2 s
                  |
-                 +--> { fields, pdf? }
+                 +--> queued / processing / failed / done { fields, pdf? }
         |
         v
 Grid: edit or delete rows
@@ -156,7 +150,7 @@ Spreadsheet dialog
 File > Save As --> POST /api/spreadsheet/save --> download
 ```
 
-The first extraction is slower than later ones because the extractor loads its models on first use. Extractions run one at a time.
+The first extraction is slower than later ones because the extractor loads its models on first use. Extractions run one at a time, in upload order.
 
 ## Folder structure
 
@@ -165,7 +159,7 @@ aspnet-core-OCR-bill-data-processing/
 ├── README.md
 └── src/
     └── IncidentExtractor/                  # ASP.NET Core minimal API (net10.0)
-        ├── Program.cs                      # Path base, extract API, spreadsheet save, image-to-PDF
+        ├── Program.cs                      # Path base, extract job queue + polling API, spreadsheet save, image-to-PDF
         ├── IncidentExtractor.csproj
         ├── appsettings.json                # PathBase for the Azure virtual directory
         ├── appsettings.Development.json
@@ -173,7 +167,7 @@ aspnet-core-OCR-bill-data-processing/
         ├── Properties/
         │   └── launchSettings.json         # http://localhost:5052
         └── wwwroot/
-            └── index.html                  # Uploader, PDF Viewer, Grid, Spreadsheet
+            └── index.html                  # Uploader, options, PDF Viewer, Grid, Spreadsheet
 ```
 
 `IncidentExtractor` is the project name. The running site name and Azure virtual directory are `aspnet-core-ocr-bill-data-processing`.
@@ -184,7 +178,7 @@ Requirements:
 
 - .NET 10 SDK
 - 64-bit process. The project sets `PlatformTarget` to `x64` because the key/value model is about 280 MB and a 32-bit process cannot allocate it.
-- A Syncfusion license key. Replace the `SYNCFUSION_LICENSE_KEY` placeholder in `Program.cs` and in `wwwroot/index.html` (`ej.base.registerLicense`).
+- A Syncfusion license key. The server reads the `SYNCFUSION_LICENSE_KEY` environment variable. Replace the `SYNCFUSION_LICENSE_KEY` placeholder in `wwwroot/index.html` (`ej.base.registerLicense`) for the client-side controls.
 
 From the repository root:
 

@@ -13,6 +13,11 @@ if (!string.IsNullOrEmpty(licenseKey)) SyncfusionLicenseProvider.RegisterLicense
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 20 * 1024 * 1024);
+
+// Configure request timeout: 5 minutes for extraction requests (handling slow OCR operations)
+var requestTimeout = TimeSpan.FromMinutes(5);
+builder.Services.Configure<HttpClient>(client => client.Timeout = requestTimeout);
+
 var app = builder.Build();
 
 // Virtual-directory base path used when this demo is published under a shared Azure App Service
@@ -78,42 +83,80 @@ string ExtractKeyValues(byte[] pdfBytes,bool enableTable,bool imageEnhance)
 
 // Extracts every key/value pair found in an uploaded PDF or image.
 // Returns { fields: [{ key, value }], pdf } where pdf is only set for images (the viewer can't open them directly).
-app.MapPost("/api/extract", async ([FromForm] IFormFile file, [FromForm] bool enableTable, [FromForm] bool imageEnhance) =>
+app.MapPost("/api/extract", async ([FromForm] IFormFile file, [FromForm] bool enableTable, [FromForm] bool imageEnhance, HttpContext context) =>
 {
+    var cancellationToken = context.RequestAborted;
+    
     var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
     if (ext is not (".pdf" or ".png" or ".jpg" or ".jpeg"))
         return Results.BadRequest("Only PDF, PNG and JPG files are supported.");
 
-    using var input = new MemoryStream();
-    await file.CopyToAsync(input);
-    byte[] pdfBytes = ext == ".pdf" ? input.ToArray() : ImageToPdf(input);
-    byte[] inputBytes = input.ToArray();
-    await extractLock.WaitAsync();
     try
     {
-        using var doc = JsonDocument.Parse(ExtractKeyValues(inputBytes, enableTable, imageEnhance));
-
-        var fields = doc.RootElement.GetProperty("Pages").EnumerateArray()
-            .SelectMany(p => p.GetProperty("KeyValuePairs").EnumerateArray())
-            .Select(kv => new
-            {
-                key = kv.GetProperty("Key").GetString()?.Trim().TrimEnd(':').Trim(),
-                value = kv.GetProperty("Value").GetString()?.Trim()
-            })
-            .Where(f => !string.IsNullOrEmpty(f.key))
-            .ToList();
-
-        return Results.Json(new
+        using var input = new MemoryStream();
+        await file.CopyToAsync(input, cancellationToken);
+        
+        cancellationToken.ThrowIfCancellationRequested();
+        
+        byte[] pdfBytes = ext == ".pdf" ? input.ToArray() : ImageToPdf(input);
+        byte[] inputBytes = input.ToArray();
+        
+        // Wait for the extraction lock with timeout (30 seconds)
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+        
+        if (!await extractLock.WaitAsync(TimeSpan.FromSeconds(30), linkedCts.Token))
         {
-            fields,
-            pdf = ext == ".pdf" ? null : "data:application/pdf;base64," + Convert.ToBase64String(pdfBytes)
-        });
+            return Results.StatusCode(503);
+        }
+        
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            
+            // Create a task for extraction with timeout
+            var extractionTask = Task.Run(() => ExtractKeyValues(inputBytes, enableTable, imageEnhance), cancellationToken);
+            var completedTask = await Task.WhenAny(
+                extractionTask,
+                Task.Delay(Timeout.Infinite, cancellationToken)
+            );
+            
+            if (completedTask != extractionTask)
+            {
+                return Results.StatusCode(504);
+            }
+            
+            using var doc = JsonDocument.Parse(extractionTask.Result);
+
+            var fields = doc.RootElement.GetProperty("Pages").EnumerateArray()
+                .SelectMany(p => p.GetProperty("KeyValuePairs").EnumerateArray())
+                .Select(kv => new
+                {
+                    key = kv.GetProperty("Key").GetString()?.Trim().TrimEnd(':').Trim(),
+                    value = kv.GetProperty("Value").GetString()?.Trim()
+                })
+                .Where(f => !string.IsNullOrEmpty(f.key))
+                .ToList();
+
+            return Results.Json(new
+            {
+                fields,
+                pdf = ext == ".pdf" ? null : "data:application/pdf;base64," + Convert.ToBase64String(pdfBytes)
+            });
+        }
+        finally 
+        { 
+            extractLock.Release(); 
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        return Results.StatusCode(408);
     }
     catch (Exception ex)
     {
         return Results.BadRequest("Could not read the document: " + ex.Message);
     }
-    finally { extractLock.Release(); }
 }).DisableAntiforgery();
 
 // Receives the Spreadsheet's save request (JSON model) and returns the generated xlsx/xls/csv/pdf file.

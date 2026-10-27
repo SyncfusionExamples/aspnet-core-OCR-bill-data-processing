@@ -258,7 +258,19 @@
                 body.append('imageEnhance', $('imageEnhance').checked);
                 try {
                     const res = await fetch(apiUrl('/api/extract'), { method: 'POST', body });
-                    if (!res.ok) throw new Error(await res.text());
+                    if (!res.ok) {
+                        let errorMsg = `Error ${res.status}`;
+                        try {
+                            const errData = await res.json();
+                            errorMsg = errData.error || errorMsg;
+                        } catch {
+                            // If response is not JSON, use default message
+                            if (res.status === 504) errorMsg = 'Server timeout: Document extraction took too long. Please try with a simpler document.';
+                            else if (res.status === 503) errorMsg = 'Server is busy. Please wait a moment and try again.';
+                            else if (res.status === 408) errorMsg = 'Request timeout. Please check your connection and try again.';
+                        }
+                        throw new Error(errorMsg);
+                    }
                     const { fields, pdf } = await res.json();
                     if (pdf) viewer.load(pdf, null);
                     grid.dataSource = fields.map((f, i) => ({ Id: i, Key: f.key, Value: f.value }));

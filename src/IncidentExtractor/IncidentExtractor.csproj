@@ -13,9 +13,9 @@
 
   <ItemGroup>
     <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.150.5" />
-    <PackageReference Include="Syncfusion.EJ2.Spreadsheet.AspNet.Core" Version="35.1.40" />
-    <PackageReference Include="Syncfusion.Pdf.Net.Core" Version="35.1.40" />
-    <PackageReference Include="Syncfusion.SmartDataExtractor.Net.Core" Version="35.1.40" />
+    <PackageReference Include="Syncfusion.EJ2.Spreadsheet.AspNet.Core" Version="*" />
+    <PackageReference Include="Syncfusion.Pdf.Net.Core" Version="*" />
+    <PackageReference Include="Syncfusion.SmartDataExtractor.Net.Core" Version="*" />
   </ItemGroup>
 
 </Project>

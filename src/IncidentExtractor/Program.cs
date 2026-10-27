@@ -1,17 +1,21 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Threading.Channels;
 using Syncfusion.Drawing;
 using Syncfusion.Licensing;
 using Syncfusion.EJ2.Spreadsheet;
 using Syncfusion.Pdf;
 using Syncfusion.Pdf.Graphics;
 using Syncfusion.SmartDataExtractor;
+using Syncfusion.OCRProcessor;
 
 var licenseKey = Environment.GetEnvironmentVariable("SYNCFUSION_LICENSE_KEY");
 if (!string.IsNullOrEmpty(licenseKey)) SyncfusionLicenseProvider.RegisterLicense(licenseKey);
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 20 * 1024 * 1024);
+
 var app = builder.Build();
 
 // Virtual-directory base path used when this demo is published under a shared Azure App Service
@@ -50,13 +54,18 @@ app.UseStaticFiles();
 DataExtractor? extractor = null;
 var extractLock = new SemaphoreSlim(1, 1);
 
-string ExtractKeyValues(byte[] pdfBytes)
+string ExtractKeyValues(byte[] pdfBytes,bool enableTable,bool imageEnhance)
 {
     for (var attempt = 1; ; attempt++)
     {
         try
         {
             extractor ??= new DataExtractor();
+            OCRProcessor processor = new OCRProcessor();
+            if (!imageEnhance)
+                processor.ImageEnhancementMode = OcrImageEnhancementMode.None;
+            extractor.OCRProcessor = processor;
+            extractor.EnableTableDetection = enableTable;
             using var pdf = new MemoryStream(pdfBytes);
             return extractor.ExtractKeyValuePairs(pdf);
         }
@@ -70,9 +79,55 @@ string ExtractKeyValues(byte[] pdfBytes)
     }
 }
 
-// Extracts every key/value pair found in an uploaded PDF or image.
-// Returns { fields: [{ key, value }], pdf } where pdf is only set for images (the viewer can't open them directly).
-app.MapPost("/api/extract", async (IFormFile file) =>
+// Large documents can take longer than a reverse proxy / custom-domain gateway allows (~230 s on Azure), which
+// surfaces as a 504. So /api/extract only validates and enqueues the upload, then answers 202 immediately with a job id.
+// A single background worker drains the queue (one OCR at a time) and the browser polls /api/extract/{id}.
+var jobs = new ConcurrentDictionary<string, ExtractJob>();
+var queue = Channel.CreateUnbounded<ExtractJob>();
+
+_ = Task.Run(async () =>
+{
+    await foreach (var job in queue.Reader.ReadAllAsync(app.Lifetime.ApplicationStopping))
+    {
+        job.Status = "processing";
+        await extractLock.WaitAsync();
+        try
+        {
+            using var doc = JsonDocument.Parse(ExtractKeyValues(job.InputBytes, job.EnableTable, job.ImageEnhance));
+            var fields = doc.RootElement.GetProperty("Pages").EnumerateArray()
+                .SelectMany(p => p.GetProperty("KeyValuePairs").EnumerateArray())
+                .Select(kv => new
+                {
+                    key = kv.GetProperty("Key").GetString()?.Trim().TrimEnd(':').Trim(),
+                    value = kv.GetProperty("Value").GetString()?.Trim()
+                })
+                .Where(f => !string.IsNullOrEmpty(f.key))
+                .ToList();
+            job.Result = new
+            {
+                fields,
+                pdf = job.IsPdf ? null : "data:application/pdf;base64," + Convert.ToBase64String(job.PdfBytes)
+            };
+            job.Status = "done";
+        }
+        catch (Exception ex)
+        {
+            job.Error = "Could not read the document: " + ex.Message;
+            job.Status = "failed";
+        }
+        finally
+        {
+            extractLock.Release();
+            job.InputBytes = job.PdfBytes = [];
+            job.Finished = DateTime.UtcNow;
+            foreach (var old in jobs.Where(j => j.Value.Finished is { } f && DateTime.UtcNow - f > TimeSpan.FromMinutes(30)).Select(j => j.Key))
+                jobs.TryRemove(old, out _);
+        }
+    }
+});
+
+// Accepts an uploaded PDF or image and queues it for extraction. Returns 202 { id } straight away.
+app.MapPost("/api/extract", async ([FromForm] IFormFile file, [FromForm] bool enableTable, [FromForm] bool imageEnhance) =>
 {
     var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
     if (ext is not (".pdf" or ".png" or ".jpg" or ".jpeg"))
@@ -80,35 +135,30 @@ app.MapPost("/api/extract", async (IFormFile file) =>
 
     using var input = new MemoryStream();
     await file.CopyToAsync(input);
-    byte[] pdfBytes = ext == ".pdf" ? input.ToArray() : ImageToPdf(input);
     byte[] inputBytes = input.ToArray();
-    await extractLock.WaitAsync();
-    try
-    {
-        using var doc = JsonDocument.Parse(ExtractKeyValues(inputBytes));
+    byte[] pdfBytes;
+    try { pdfBytes = ext == ".pdf" ? inputBytes : ImageToPdf(input); }
+    catch (Exception ex) { return Results.BadRequest("Could not read the document: " + ex.Message); }
 
-        var fields = doc.RootElement.GetProperty("Pages").EnumerateArray()
-            .SelectMany(p => p.GetProperty("KeyValuePairs").EnumerateArray())
-            .Select(kv => new
-            {
-                key = kv.GetProperty("Key").GetString()?.Trim().TrimEnd(':').Trim(),
-                value = kv.GetProperty("Value").GetString()?.Trim()
-            })
-            .Where(f => !string.IsNullOrEmpty(f.key))
-            .ToList();
-
-        return Results.Json(new
-        {
-            fields,
-            pdf = ext == ".pdf" ? null : "data:application/pdf;base64," + Convert.ToBase64String(pdfBytes)
-        });
-    }
-    catch (Exception ex)
+    var job = new ExtractJob
     {
-        return Results.BadRequest("Could not read the document: " + ex.Message);
-    }
-    finally { extractLock.Release(); }
+        Id = Guid.NewGuid().ToString("N"),
+        InputBytes = inputBytes,
+        PdfBytes = pdfBytes,
+        IsPdf = ext == ".pdf",
+        EnableTable = enableTable,
+        ImageEnhance = imageEnhance
+    };
+    jobs[job.Id] = job;
+    await queue.Writer.WriteAsync(job);
+    return Results.Accepted(value: new { id = job.Id });
 }).DisableAntiforgery();
+
+// Poll endpoint: { status: queued|processing|done|failed, result?, error? }
+app.MapGet("/api/extract/{id}", (string id) =>
+    jobs.TryGetValue(id, out var job)
+        ? Results.Json(new { status = job.Status, result = job.Result, error = job.Error })
+        : Results.NotFound("Extraction job not found or expired. Please upload the file again."));
 
 // Receives the Spreadsheet's save request (JSON model) and returns the generated xlsx/xls/csv/pdf file.
 app.MapPost("/api/spreadsheet/save", ([FromForm] SaveSettings settings) =>
@@ -131,4 +181,19 @@ static byte[] ImageToPdf(Stream image)
     using var ms = new MemoryStream();
     doc.Save(ms);
     return ms.ToArray();
+}
+
+
+class ExtractJob
+{
+    public string Id { get; init; } = "";
+    public volatile string Status = "queued";
+    public byte[] InputBytes = [];
+    public byte[] PdfBytes = [];
+    public bool IsPdf { get; init; }
+    public bool EnableTable { get; init; }
+    public bool ImageEnhance { get; init; }
+    public object? Result;
+    public string? Error;
+    public DateTime? Finished;
 }

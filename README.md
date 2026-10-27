@@ -4,7 +4,7 @@ ASP.NET Core sample that reads a bill, receipt, or invoice and turns its labeled
 
 Upload a PDF or a PNG/JPG screenshot. Syncfusion Smart Data Extractor reads every key/value pair it can find. The page shows the document beside an editable grid, then loads the reviewed rows into a Syncfusion Spreadsheet so they can be saved as Excel, CSV, or PDF.
 
-The sample is a single minimal API project. It is meant to be published on Azure App Service as a virtual application at `/aspnet-core-ocr-bill-data-processing`.
+The sample is a single minimal API project.
 
 ## Purpose
 
@@ -40,7 +40,7 @@ The server accepts `.pdf`, `.png`, `.jpg`, and `.jpeg`, and rejects anything els
 
 ### Key-value extraction (queued jobs)
 
-Large documents can take longer than an Azure gateway allows (about 230 seconds), which would surface as a 504. So extraction is asynchronous:
+Large documents can take a long time to process, so a single long-running request could time out. Extraction is therefore asynchronous:
 
 1. `POST /api/extract` validates the file, converts an image to a one-page PDF, creates an `ExtractJob`, queues it, and returns `202 Accepted` with `{ id }`.
 2. A single background worker reads the queue and runs `DataExtractor.ExtractKeyValuePairs` for one job at a time.
@@ -93,9 +93,9 @@ app.MapPost("/api/spreadsheet/save", ([FromForm] SaveSettings settings) =>
 });
 ```
 
-### Azure virtual-directory base path
+### Base path
 
-The app is published under `/aspnet-core-ocr-bill-data-processing`, not at the site root. `PathBase` in `appsettings.json` is applied with `UsePathBase`. `ASPNETCORE_PATHBASE` overrides it, and `web.config` sets that variable for Windows App Service / IIS.
+The app is served under the `/aspnet-core-ocr-bill-data-processing` base path. `PathBase` in `appsettings.json` is applied with `UsePathBase`, and the `ASPNETCORE_PATHBASE` environment variable overrides it.
 
 Requests that arrive without the prefix are redirected into it. Browser-refresh WebSocket requests and `/_framework` requests are not redirected, so a Visual Studio or `dotnet watch` reload socket is not closed by that redirect.
 
@@ -111,11 +111,7 @@ const basePath = (() => {
 const apiUrl = path => basePath + path;
 ```
 
-Published URL:
-
-`https://<your-app>.azurewebsites.net/aspnet-core-ocr-bill-data-processing/`
-
-Add the virtual application in Azure with that path name, and set the `SYNCFUSION_LICENSE_KEY` app setting (environment variable) to a valid license key.
+Set the `SYNCFUSION_LICENSE_KEY` environment variable to a valid license key.
 
 ## Workflow
 
@@ -161,16 +157,16 @@ aspnet-core-OCR-bill-data-processing/
     └── IncidentExtractor/                  # ASP.NET Core minimal API (net10.0)
         ├── Program.cs                      # Path base, extract job queue + polling API, spreadsheet save, image-to-PDF
         ├── IncidentExtractor.csproj
-        ├── appsettings.json                # PathBase for the Azure virtual directory
+        ├── appsettings.json                # PathBase setting
         ├── appsettings.Development.json
-        ├── web.config                      # IIS / Azure App Service path-base setting
+        ├── web.config                      # Path-base environment setting
         ├── Properties/
         │   └── launchSettings.json         # http://localhost:5052
         └── wwwroot/
             └── index.html                  # Uploader, options, PDF Viewer, Grid, Spreadsheet
 ```
 
-`IncidentExtractor` is the project name. The running site name and Azure virtual directory are `aspnet-core-ocr-bill-data-processing`.
+`IncidentExtractor` is the project name. The base path is `aspnet-core-ocr-bill-data-processing`.
 
 ## How to run the sample
 

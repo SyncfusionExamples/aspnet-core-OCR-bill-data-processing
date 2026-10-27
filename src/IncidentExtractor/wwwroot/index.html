@@ -120,9 +120,29 @@
     </style>
 </head>
 <body>
-    <header id="top-wrapper">
-        <h1>Document Data Extractor</h1>
-        <span id="status">Upload a PDF or screenshot to extract its key-value fields.</span>
+    <header id="top-wrapper" style="display:flex; justify-content:space-between; align-items:flex-start;">
+
+        <!-- Left Section -->
+        <div>
+            <h1 style="margin:0;">Document Data Extractor</h1>
+
+            <div style="display:flex; gap:20px; margin-top:8px;">
+                <label style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" id="enableTable" checked />
+                    <span>Enable Table</span>
+                </label>
+
+                <label style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" id="imageEnhance" />
+                    <span>Image Enhance</span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Right Section -->
+        <span id="status" style="margin-top:3px;">
+            Upload a PDF or screenshot to extract its key-value fields.
+        </span>
         <input type="file" id="upload" />
     </header>
     <main>
@@ -234,6 +254,8 @@
                 }
                 const body = new FormData();
                 body.append('file', file);
+                body.append('enableTable', $('enableTable').checked);
+                body.append('imageEnhance', $('imageEnhance').checked);
                 try {
                     const res = await fetch(apiUrl('/api/extract'), { method: 'POST', body });
                     if (!res.ok) throw new Error(await res.text());

@@ -6,6 +6,7 @@ using Syncfusion.EJ2.Spreadsheet;
 using Syncfusion.Pdf;
 using Syncfusion.Pdf.Graphics;
 using Syncfusion.SmartDataExtractor;
+using Syncfusion.OCRProcessor;
 
 var licenseKey = Environment.GetEnvironmentVariable("SYNCFUSION_LICENSE_KEY");
 if (!string.IsNullOrEmpty(licenseKey)) SyncfusionLicenseProvider.RegisterLicense(licenseKey);
@@ -50,13 +51,18 @@ app.UseStaticFiles();
 DataExtractor? extractor = null;
 var extractLock = new SemaphoreSlim(1, 1);
 
-string ExtractKeyValues(byte[] pdfBytes)
+string ExtractKeyValues(byte[] pdfBytes,bool enableTable,bool imageEnhance)
 {
     for (var attempt = 1; ; attempt++)
     {
         try
         {
             extractor ??= new DataExtractor();
+            OCRProcessor processor = new OCRProcessor();
+            if (!imageEnhance)
+                processor.ImageEnhancementMode = OcrImageEnhancementMode.None;
+            extractor.OCRProcessor = processor;
+            extractor.EnableTableDetection = enableTable;
             using var pdf = new MemoryStream(pdfBytes);
             return extractor.ExtractKeyValuePairs(pdf);
         }
@@ -72,7 +78,7 @@ string ExtractKeyValues(byte[] pdfBytes)
 
 // Extracts every key/value pair found in an uploaded PDF or image.
 // Returns { fields: [{ key, value }], pdf } where pdf is only set for images (the viewer can't open them directly).
-app.MapPost("/api/extract", async (IFormFile file) =>
+app.MapPost("/api/extract", async ([FromForm] IFormFile file, [FromForm] bool enableTable, [FromForm] bool imageEnhance) =>
 {
     var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
     if (ext is not (".pdf" or ".png" or ".jpg" or ".jpeg"))
@@ -85,7 +91,7 @@ app.MapPost("/api/extract", async (IFormFile file) =>
     await extractLock.WaitAsync();
     try
     {
-        using var doc = JsonDocument.Parse(ExtractKeyValues(inputBytes));
+        using var doc = JsonDocument.Parse(ExtractKeyValues(inputBytes, enableTable, imageEnhance));
 
         var fields = doc.RootElement.GetProperty("Pages").EnumerateArray()
             .SelectMany(p => p.GetProperty("KeyValuePairs").EnumerateArray())

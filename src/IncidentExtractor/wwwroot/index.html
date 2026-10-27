@@ -258,20 +258,25 @@
                 body.append('imageEnhance', $('imageEnhance').checked);
                 try {
                     const res = await fetch(apiUrl('/api/extract'), { method: 'POST', body });
-                    if (!res.ok) {
-                        let errorMsg = `Error ${res.status}`;
-                        try {
-                            const errData = await res.json();
-                            errorMsg = errData.error || errorMsg;
-                        } catch {
-                            // If response is not JSON, use default message
-                            if (res.status === 504) errorMsg = 'Server timeout: Document extraction took too long. Please try with a simpler document.';
-                            else if (res.status === 503) errorMsg = 'Server is busy. Please wait a moment and try again.';
-                            else if (res.status === 408) errorMsg = 'Request timeout. Please check your connection and try again.';
-                        }
-                        throw new Error(errorMsg);
+                    if (!res.ok) throw new Error((await res.text()) || `Error ${res.status}`);
+                    const { id } = await res.json();
+                    // The server queues the work and answers immediately; poll until it finishes so that
+                    // large files never hit a gateway timeout. The spinner stays on meanwhile.
+                    let job;
+                    for (;;) {
+                        await new Promise(r => setTimeout(r, 2000));
+                        let poll;
+                        try { poll = await fetch(apiUrl('/api/extract/' + id)); }
+                        catch { continue; } // transient network error: keep waiting
+                        if (poll.status === 502 || poll.status === 503 || poll.status === 504) continue;
+                        if (!poll.ok) throw new Error((await poll.text()) || `Error ${poll.status}`);
+                        job = await poll.json();
+                        if (job.status === 'queued') $('spinnerText').textContent = 'Waiting in queue...';
+                        else if (job.status === 'processing') $('spinnerText').textContent = 'Extracting, please wait...';
+                        else break;
                     }
-                    const { fields, pdf } = await res.json();
+                    if (job.status === 'failed') throw new Error(job.error);
+                    const { fields, pdf } = job.result;
                     if (pdf) viewer.load(pdf, null);
                     grid.dataSource = fields.map((f, i) => ({ Id: i, Key: f.key, Value: f.value }));
                     $('review').disabled = !fields.length;
